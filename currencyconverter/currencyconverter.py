@@ -13,21 +13,6 @@ class CurrencyConverterIRC3:
         self.url = "https://finance.google.com/finance/converter"
         self.currencies = self.availableCurrencies()
 
-    # @irc3.event(irc3.rfc.PRIVMSG)
-    # def youtube(self, mask=None, event=None, target=None, data=None, **kw):
-    #     match = None
-    #     pattern = ".+(?:youtube\.com\/(?:watch\?v=|v\/)|youtu\.be\/)([\w-]+)"
-    #     match = re.match(pattern, data, re.IGNORECASE)
-    #     if match:
-    #         res = requests.get("https://www.youtube.com/watch?v={}".format(match.group(1)))
-
-    #         soup = BeautifulSoup(res.text, "html.parser")
-
-    #         self.bot.privmsg(
-    #             target,
-    #             soup.title.string
-    #         )
-
     @command(options_first=True)
     def currency(self, mask, target, args):
         """Convert from one currency to another
