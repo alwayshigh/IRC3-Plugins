@@ -11,6 +11,7 @@ import random
 import re
 import requests
 import time
+import _string
 
 currencyList = {
     "AUD": "${} AUD",
@@ -54,7 +55,10 @@ class CoinMarketCapIRC3:
         "update_timeout": 180,
         "currency_format": "None",
         "default_currency": "USD",
-        "coin_convert_format": "[{name}] {amount_coin} {symbol} is worth {total_price} | {total_btc} BTC",
+    }
+
+    formats = {
+        "coin_net_worth_format": "[{name}] {amount_coin} {symbol} is worth {total_price} | {total_btc} BTC",
         "coin_format": "[{symbol}] {name} - #{rank} | {price_btc} BTC | {price} | 24h Vol - {24h_volume} | 1h {percent_change_1h}% | 24h {percent_change_24h}% | 7d {percent_change_7d}%",
         "top10_format": "[{symbol}] {name} | {percent_change}% | {price_btc} BTC | {price}",
         "volume_format": "[{symbol}] {name} | Vol {24h_volume_percent}% | {price_btc}BTC | {price}",
@@ -70,46 +74,109 @@ class CoinMarketCapIRC3:
         )
 
         logging.info("Starting Bot")
+
         self.config.update(self.bot.config["coinmarketcap"])
+        self.formats.update(self.bot.config["coinmarketcap_formats"])
         self.coinMarketCap = CoinMarketCap(self.config)
 
-        loop = asyncio.get_event_loop()
+        self.loop = asyncio.get_event_loop()
         try:
             asyncio.async(self.coinMarketCap.buildCoinData())
         except asyncio.CancelledError:
             pass
+        asyncio.async(self.testOutputFormats())
         
-    @command
-    def coin(self, mask, target, args):
-        """Display coin information
+    @asyncio.coroutine
+    def testOutputFormats(self):
+        testFormats = {
+            "coin_net_worth_format": ["ticker", ["btc", "1"] ],
+            "coin_format": ["ticker", ["btc"] ],
+            "top10_format": ["top10", ["gainers", "24h"] ],
+            "volume_format": ["volume", None],
+            "overview_format": ["overview", None]
+        }
 
-            %%coin <coin>... [--total=<amount>]
+        valid = True
+        for formatName, data in testFormats.items():
+            pass
+            if data[1]:
+                result = getattr(self.coinMarketCap, data[0])(*data[1])
+            else:
+                result = getattr(self.coinMarketCap, data[0])()
+            
+            options = []
+            for v in result:
+                if not isinstance(v, str):
+                    for key, val in enumerate(v):
+                        options.append(val)
+                    break
+                else:
+                    options.append(v)
+
+            formatVariables = [fname for _, fname, _, _ in _string.formatter_parser(self.formats[formatName]) if fname]        
+            invalids = []
+            for var in formatVariables:
+                if not var in options:
+                    invalids.append(var)
+
+            if invalids:
+                invalids = " ".join(["{{{}}}".format(invalids[i]) for i in range(len(invalids))])
+                logging.error("Invalid config options: " + formatName + " - " + invalids)
+                valid = False
+
+        if not valid:
+            print("You have errors in your output formats, Please check logs")
+            self.loop.stop()
+       
+
+    def printToIRC(self, formatString, values, target):
+        try:
+            self.bot.privmsg(
+                target, 
+                self.formats[formatString].format(**values)
+            )
+        except KeyError as e:
+            print(e)    
+   
+    @command
+    def networth(self, mask, target, args):
+        """Display total value of amount of coin
+
+            %%networth <amount> <coin>...
         """
         coin = " ".join(args["<coin>"])
-        response = self.coinMarketCap.ticker(coin ,args["--total"])
+        response = self.coinMarketCap.ticker(coin, args["<amount>"])
         if response:
-            if args["--total"]:
-                response["amount_coin"] = args["--total"]
-                self.bot.privmsg(
-                    target, 
-                    self.config["coin_convert_format"].format(**response)
-                )                
-            else:
-                self.bot.privmsg(
-                    target, 
-                    self.config["coin_format"].format(**response)
-                )
+            self.printToIRC("coin_net_worth_format", response, target)             
         else:
-            if args["--total"]:
-                self.bot.privmsg(
-                    target, 
-                    "Error with --total"
-                )
-            else:
+            try:
+                float(args["<amount>"])
+
                 self.bot.privmsg(
                     target, 
                     "{} - Cant be found.".format(coin)
                 )
+            except ValueError:
+                self.bot.privmsg(
+                    target, 
+                    "Amount is not a valid number"
+                )
+
+    @command
+    def coin(self, mask, target, args):
+        """Display coin information
+
+            %%coin <coin>...
+        """
+        coin = " ".join(args["<coin>"])
+        response = self.coinMarketCap.ticker(coin)
+        if response:
+            self.printToIRC("coin_format", response, target)
+        else:
+            self.bot.privmsg(
+                target, 
+                "{} - Cant be found.".format(coin)
+            )
 
     @command
     def volume(self, mask, target, args):
@@ -120,10 +187,7 @@ class CoinMarketCapIRC3:
         response = self.coinMarketCap.volume()
         self.bot.privmsg(mask.nick, "Top Trade Volume (24h)")
         for coin in response:
-            self.bot.privmsg(
-                mask.nick,
-                self.config["volume_format"].format(**coin)
-            )
+            self.printToIRC("volume_format", coin, target)
 
     @command
     def overview(self, mask, target, args):
@@ -132,10 +196,7 @@ class CoinMarketCapIRC3:
            %%overview
         """
         response = self.coinMarketCap.overview()
-        self.bot.privmsg(
-            target,
-            self.config["overview_format"].format(**response)
-        )
+        self.printToIRC("overview_format", response, target)
 
     @command
     def top10(self, mask, target, args):
@@ -160,10 +221,8 @@ class CoinMarketCapIRC3:
         
         for coin in response:
             coin["percent_change"] = coin[changeIndex]
-            self.bot.privmsg(
-                mask.nick,
-                self.config["top10_format"].format(**coin)
-            )
+            self.printToIRC("top10_format", coin, mask.nick)
+
 
 class CoinMarketCap():
     
@@ -262,16 +321,15 @@ class CoinMarketCap():
                     # Top 10 gainers loop
                     for index, topTenCoin in enumerate(topTen["gainers"][t]):
                         if float(coin[timeIndex]) > float(topTenCoin[timeIndex]):
-                            topTen["gainers"][t] = self.__insertCoin(topTen["gainers"][t], index, coin, strip=10)
+                            topTen["gainers"][t] = self.__insertCoin(topTen["gainers"][t], index, coin, args={"percent_change": ""}, strip=10)
                             break
                     # Top 10 losers loop
                     for index, topTenCoin in enumerate(topTen["losers"][t]):
                         if float(coin[timeIndex]) < float(topTenCoin[timeIndex]):
-                            topTen["losers"][t] = self.__insertCoin(topTen["losers"][t], index, coin, strip=10)
+                            topTen["losers"][t] = self.__insertCoin(topTen["losers"][t], index, coin, args={"percent_change": ""}, strip=10)
                             break
         self.topTen = topTen
         self.lastUpdated = time.time()
-        #logging.info("CoinMarketCap data successfully updated to Bot in {} seconds.".format(round(time.time() - updateTime, 4)))
         yield from asyncio.sleep(self.config["update_timeout"])
         asyncio.async(self.buildCoinData())
 
@@ -303,7 +361,8 @@ class CoinMarketCap():
                 if amount:
                     try:
                         currency = self.config["default_currency"]
-                        amount = float(amount)
+
+                        c["amount_coin"] = amount = float(amount)
                         
                         c["total_btc"] = '{:.8f}'.format(amount * float(c["price_btc"]))
                         c["total_price"] = '{:,}'.format(round(amount * float(c["price_"+currency.lower()]),2))
