@@ -187,7 +187,7 @@ class CoinMarketCapIRC3:
         response = self.coinMarketCap.volume()
         self.bot.privmsg(mask.nick, "Top Trade Volume (24h)")
         for coin in response:
-            self.printToIRC("volume_format", coin, target)
+            self.printToIRC("volume_format", coin, mask.nick)
 
     @command
     def overview(self, mask, target, args):
